@@ -1,6 +1,6 @@
 const express = require('express');
 const Lead = require('../models/lead');
-const User = require('../models/user');
+const User = require('../models/User');
 const { auth, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
