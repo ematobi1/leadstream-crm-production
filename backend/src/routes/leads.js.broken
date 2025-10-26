@@ -1,0 +1,298 @@
+const express = require('express');
+const Lead = require('../models/Lead');
+const User = require('../models/User');
+const { auth, authorize } = require('../middleware/auth');
+
+const router = express.Router();
+
+// Get all leads with filtering and pagination
+router.get('/', auth, async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      status,
+      priority,
+      assignedTo,
+      search,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+
+    const filter = {};
+    if (req.user.role === 'sales_rep') {
+      filter.assignedTo = req.user._id;
+    }
+    if (status) filter.status = status;
+    if (priority) filter.priority = priority;
+    if (assignedTo) filter.assignedTo = assignedTo;
+
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { company: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const skip = (page - 1) * limit;
+    const sort = { [sortBy]: sortOrder === 'desc' ? -1 : 1 };
+
+    const [leads, total] = await Promise.all([
+      Lead.find(filter)
+        .populate('assignedTo', 'name email')
+        .populate('createdBy', 'name email')
+        .sort(sort)
+        .skip(skip)
+        .limit(parseInt(limit, 10)),
+      Lead.countDocuments(filter)
+    ]);
+
+    res.json({
+      leads,
+      pagination: {
+        current: parseInt(page, 10),
+        pages: Math.ceil(total / limit),
+        total
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create new lead
+router.post('/', auth, async (req, res) => {
+  try {
+    const leadData = {
+      ...req.body,
+      createdBy: req.user._id
+    };
+
+    if (!leadData.assignedTo) {
+      leadData.assignedTo = req.user._id;
+    }
+
+    const lead = new Lead(leadData);
+    await lead.save();
+    await lead.populate('assignedTo createdBy');
+
+    if (req.io) {
+      req.io.emit('newLead', {
+        lead: lead.toObject(),
+        assignedTo: leadData.assignedTo
+      });
+    }
+
+    res.status(201).json(lead);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Get single lead
+router.get('/:id', auth, async (req, res) => {
+  try {
+    const lead = await Lead.findById(req.params.id)
+      .populate('assignedTo', 'name email phone')
+      .populate('createdBy', 'name email')
+      .populate('notes.createdBy', 'name email')
+      .populate('activities.createdBy', 'name email');
+
+    if (!lead) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    if (req.user.role === 'sales_rep' && 
+        lead.assignedTo?._id.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    res.json(lead);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update lead
+router.put('/:id', auth, async (req, res) => {
+  try {
+    const lead = await Lead.findById(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    if (req.user.role === 'sales_rep' && 
+        lead.assignedTo?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const oldStatus = lead.status;
+    const newStatus = req.body.status;
+
+    Object.assign(lead, req.body);
+
+    if (oldStatus !== newStatus && newStatus) {
+      lead.activities.push({
+        type: 'status_change',
+        description: `Status changed from ${oldStatus} to ${newStatus}`,
+        createdBy: req.user._id
+      });
+    }
+
+    if (['contacted', 'qualified'].includes(newStatus)) {
+      lead.lastContactedAt = new Date();
+      if (oldStatus === 'new') {
+        lead.responseTime = Math.round((Date.now() - lead.createdAt) / (1000 * 60));
+      }
+    }
+
+    await lead.save();
+    await lead.populate('assignedTo createdBy');
+
+    if (req.io) {
+      req.io.emit('leadUpdated', {
+        leadId: lead._id,
+        changes: req.body,
+        updatedBy: req.user._id
+      });
+    }
+
+    res.json(lead);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Add note to lead
+router.post('/:id/notes', auth, async (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({ error: 'Note content is required' });
+    }
+
+    const lead = await Lead.findById(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    const note = {
+      content: content.trim(),
+      createdBy: req.user._id
+    };
+    lead.notes.push(note);
+    lead.activities.push({
+      type: 'note',
+      description: `Added note: ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`,
+      createdBy: req.user._id
+    });
+
+    await lead.save();
+    await lead.populate('notes.createdBy', 'name email');
+
+    if (req.io) {
+      req.io.emit('leadNoteAdded', {
+        leadId: lead._id,
+        note: lead.notes[lead.notes.length - 1],
+        addedBy: req.user._id
+      });
+    }
+
+    res.status(201).json(lead.notes[lead.notes.length - 1]);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Dashboard analytics
+router.get('/analytics/dashboard', auth, authorize(['manager', 'admin']), async (req, res) => {
+  try {
+    const { timeRange = '7d' } = req.query;
+    const now = new Date();
+    const startDate = new Date();
+
+    switch (timeRange) {
+      case '7d':
+        startDate.setDate(now.getDate() - 7);
+        break;
+      case '30d':
+        startDate.setDate(now.getDate() - 30);
+        break;
+      case '90d':
+        startDate.setDate(now.getDate() - 90);
+        break;
+      default:
+        startDate.setDate(now.getDate() - 30);
+    }
+
+    const [
+      totalLeads,
+      newLeads,
+      convertedLeads,
+      avgResponseTime
+    ] = await Promise.all([
+      Lead.countDocuments({ createdAt: { $gte: startDate } }),
+      Lead.countDocuments({ createdAt: { $gte: startDate }, status: 'new' }),
+      Lead.countDocuments({ createdAt: { $gte: startDate }, status: { $in: ['closed_won'] } }),
+      Lead.aggregate([
+        { $match: { responseTime: { $exists: true, $ne: null } } },
+        { $group: { _id: null, avgTime: { $avg: '$responseTime' } } }
+      ])
+    ]);
+
+    const conversionRate = totalLeads > 0 ? (convertedLeads / totalLeads) * 100 : 0;
+    const avgResponse = avgResponseTime[0]?.avgTime || 0;
+
+    res.json({
+      summary: {
+        totalLeads,
+        newLeads,
+        convertedLeads,
+        conversionRate: Math.round(conversionRate * 100) / 100,
+        avgResponseTime: Math.round(avgResponse * 100) / 100
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete lead
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const lead = await Lead.findById(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    if (req.user.role === 'sales_rep' && 
+        lead.assignedTo?.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    await Lead.findByIdAndDelete(req.params.id);
+
+    if (req.io) {
+      req.io.emit('leadDeleted', {
+        leadId: lead._id,
+        deletedBy: req.user._id
+      });
+    }
+
+    res.json({ message: 'Lead deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+// Get next lead to call
+router.get("'/next-lead'", auth, async (req, res) => {
+  try {
+    const lead = await Lead.findOne({
+      assignedTo: req.user._id,
+      status: { $in: ["'new'", "'contacted'"] },
+      $or: [
+        { phone: { $exists: true, $ne: "''"
+module.exports = router;
