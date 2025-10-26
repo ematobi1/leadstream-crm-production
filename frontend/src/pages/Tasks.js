@@ -9,8 +9,6 @@ import {
   ChevronDown, X, Edit, Trash2, AlertCircle, Star, Zap
 } from 'lucide-react';
 
-const API_URL = process.env.REACT_APP_API_URL || '${API_URL}';
-
 export default function Tasks() {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState('all');
