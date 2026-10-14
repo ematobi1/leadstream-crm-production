@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
+        env:
+          CI: false
+
+  backend:
+    name: Backend smoke test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+      - name: Boot server and hit /api/health
+        env:
+          PORT: 5001
+          JWT_SECRET: ci-only-secret
+        run: |
+          node src/app.js &
+          for i in $(seq 1 20); do
+            curl -fsS http://localhost:5001/api/health && exit 0
+            sleep 1
+          done
+          echo "Server did not become healthy" && exit 1

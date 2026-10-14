@@ -12,7 +12,7 @@ import {
 
 const fetchDashboardData = async () => {
   const token = localStorage.getItem('token');
-  const response = await fetch('${API_URL}/leads/analytics/dashboard', {
+  const response = await fetch(`${API_URL}/leads/analytics/dashboard`, {
     headers: {
       'Authorization': `Bearer ${token}`
     }
@@ -40,7 +40,7 @@ const fetchRecentLeads = async (searchQuery = '') => {
   const token = localStorage.getItem('token');
   const url = searchQuery
     ? `${API_URL}/leads?search=${encodeURIComponent(searchQuery)}&limit=10&sortBy=createdAt&sortOrder=desc`
-    : '${API_URL}/leads?limit=10&sortBy=createdAt&sortOrder=desc';
+    : `${API_URL}/leads?limit=10&sortBy=createdAt&sortOrder=desc`;
 
   const response = await fetch(url, {
     headers: {
@@ -73,7 +73,7 @@ const fetchLeadDetail = async (leadId) => {
 
 const fetchNextLead = async () => {
   const token = localStorage.getItem('token');
-  const response = await fetch('${API_URL}/leads/next-lead', {
+  const response = await fetch(`${API_URL}/leads/next-lead`, {
     headers: {
       'Authorization': `Bearer ${token}`
     }
@@ -187,7 +187,7 @@ export default function Dashboard() {
     setIsSendingEmail(true);
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('${API_URL}/leads/send-followup', {
+      const response = await fetch(`${API_URL}/leads/send-followup`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

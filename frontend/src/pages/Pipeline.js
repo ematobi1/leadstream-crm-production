@@ -10,7 +10,7 @@ import {
 
 const fetchDeals = async () => {
   const token = localStorage.getItem('token');
-  const response = await fetch('${API_URL}/leads?status=proposal,negotiation,qualified', {
+  const response = await fetch(`${API_URL}/leads?status=proposal,negotiation,qualified`, {
     headers: { 'Authorization': `Bearer ${token}` }
   });
   if (!response.ok) throw new Error('Failed to fetch deals');

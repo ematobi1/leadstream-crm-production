@@ -54,10 +54,7 @@ app.use('/api/', limiter);
 
 // --- DATABASE CONNECTIONS ---
 mongoose
-  .connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/leadstream', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
+  .connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/leadstream')
   .then(() => logger.info('✅ Connected to MongoDB'))
   .catch((err) => logger.error('❌ MongoDB connection error:', err));
 
